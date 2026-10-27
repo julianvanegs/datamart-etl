@@ -6,6 +6,7 @@ Autor: **Julián Vanegas** · Prueba de desempeño, Ingeniería de Datos · Coho
 
 - 📐 Decisiones técnicas y casos ambiguos: [`docs/DECISIONES_TECNICAS.md`](docs/DECISIONES_TECNICAS.md)
 - 🗺️ Diagrama del modelo de datos: [`docs/modelo_datos.png`](docs/modelo_datos.png) · [`docs/modelo_datos.dbml`](docs/modelo_datos.dbml) (pegar en dbdiagram.io)
+- ❓ Las 7 preguntas de negocio con su consulta y su respuesta con cifras reales: [`docs/PREGUNTAS_DE_NEGOCIO.md`](docs/PREGUNTAS_DE_NEGOCIO.md)
 - 🔎 Consultas SQL de validación (una o más por cada pregunta de negocio): [`sql/validation/`](sql/validation/)
 
 ---
