@@ -2,15 +2,14 @@
 
 Orden de busqueda de cada archivo:
   1. data/raw/<archivo>          (CSV reales de Kaggle colocados por el usuario)
-  2. descarga desde Kaggle       (solo si hay KAGGLE_USERNAME y KAGGLE_KEY)
+  2. descarga desde Kaggle       (kagglehub; los datasets son publicos)
   3. seeds/<archivo>_sample.csv  (datos de prueba incluidos en el repositorio)
 """
 from __future__ import annotations
 
 import logging
-import os
 import re
-import subprocess
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -27,10 +26,13 @@ SEED_FILES = {
     SOURCE_HISTORY: "sales_history_sample.csv",
 }
 
-# Formato de fecha esperado en cada fuente (hora local de Londres, sin zona horaria)
+# Formatos de fecha aceptados por fuente, en orden de prueba (hora local de Londres, sin zona horaria).
+# Los datasets reales usan "12/1/2010 8:26"; el historico de prueba (seeds) usa ISO "2010-12-01 08:26:00".
+_US_FORMAT = "%m/%d/%Y %H:%M"
+_ISO_FORMAT = "%Y-%m-%d %H:%M:%S"
 DATE_FORMATS = {
-    SOURCE_DAILY: "%m/%d/%Y %H:%M",      # 12/1/2010 8:26
-    SOURCE_HISTORY: "%Y-%m-%d %H:%M:%S",  # 2009-12-01 07:45:00
+    SOURCE_DAILY: (_US_FORMAT, _ISO_FORMAT),
+    SOURCE_HISTORY: (_US_FORMAT, _ISO_FORMAT),
 }
 
 # Los dos datasets nombran distinto las mismas columnas: se unifican aqui.
@@ -47,17 +49,26 @@ COLUMN_ALIASES = {
 STANDARD_COLUMNS = list(COLUMN_ALIASES)
 
 
-def _kaggle_available() -> bool:
-    return bool(os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"))
+def _download_from_kaggle(dataset: str, file_name: str, raw_dir: Path) -> Path | None:
+    """Descarga el dataset con kagglehub y copia su CSV a data/raw/<file_name>.
 
+    Los datasets de este caso son publicos: kagglehub los baja sin credenciales. Si tu red o
+    Kaggle exigen sesion, define KAGGLE_USERNAME y KAGGLE_KEY en .env.
+    """
+    import kagglehub  # import tardio: solo se necesita si faltan los CSV en data/raw
 
-def _download_from_kaggle(dataset: str, target_dir: Path) -> None:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    log.info("Descargando %s desde Kaggle...", dataset)
-    subprocess.run(
-        ["kaggle", "datasets", "download", "-d", dataset, "-p", str(target_dir), "--unzip"],
-        check=True,
-    )
+    log.info("Descargando %s con kagglehub...", dataset)
+    downloaded = Path(kagglehub.dataset_download(dataset))
+    csvs = sorted(downloaded.rglob("*.csv"), key=lambda p: p.stat().st_size, reverse=True)
+    if not csvs:
+        return None
+    chosen = next((c for c in csvs if c.name == file_name), csvs[0])  # mismo dataset: el mas grande
+    if chosen.name != file_name:
+        log.warning("%s no existe en %s; se usa %s", file_name, dataset, chosen.name)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    target = raw_dir / file_name
+    shutil.copyfile(chosen, target)
+    return target
 
 
 def resolve_source(source_system: str, file_name: str, kaggle_dataset: str) -> tuple[Path, str]:
@@ -67,18 +78,12 @@ def resolve_source(source_system: str, file_name: str, kaggle_dataset: str) -> t
     if candidate.exists():
         return candidate, "raw"
 
-    if _kaggle_available():
-        try:
-            _download_from_kaggle(kaggle_dataset, raw_dir)
-            if candidate.exists():
-                return candidate, "kaggle"
-            # El dataset puede traer el CSV con otro nombre: se toma el CSV nuevo mas grande.
-            csvs = sorted(raw_dir.glob("*.csv"), key=lambda p: p.stat().st_size, reverse=True)
-            if csvs:
-                log.warning("%s no existe; se usa %s", file_name, csvs[0].name)
-                return csvs[0], "kaggle"
-        except Exception as exc:  # sin red, credenciales invalidas, etc.
-            log.warning("Descarga de Kaggle fallida (%s). Se usara el seed.", exc)
+    try:
+        downloaded = _download_from_kaggle(kaggle_dataset, file_name, raw_dir)
+        if downloaded:
+            return downloaded, "kaggle"
+    except Exception as exc:  # sin red, dataset no disponible, etc.
+        log.warning("Descarga de Kaggle fallida (%s). Se usaran los datos de prueba.", exc)
 
     seed = SEEDS_DIR / SEED_FILES[source_system]
     if not seed.exists():

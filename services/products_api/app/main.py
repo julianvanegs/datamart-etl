@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -17,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import analytics
-from .catalog import build_catalog
+from .catalog import build_catalog, sources_signature
 
 API_TOKEN = os.environ["PRODUCTS_API_TOKEN"]
 STATIC_DIR = Path(__file__).parent / "static"
@@ -37,13 +38,26 @@ app.add_middleware(
 
 _CATALOG: list[dict] = []
 _BY_CODE: dict[str, dict] = {}
+_SIGNATURE: tuple | None = None
+_LOCK = threading.Lock()
+
+
+def current_catalog() -> list[dict]:
+    """Catalogo en memoria; se reconstruye si los CSV cambiaron (p. ej. el pipeline los acaba de descargar)."""
+    global _CATALOG, _BY_CODE, _SIGNATURE
+    signature = sources_signature()
+    if signature != _SIGNATURE:
+        with _LOCK:
+            if signature != _SIGNATURE:
+                _CATALOG = build_catalog()
+                _BY_CODE = {p["code"]: p for p in _CATALOG}
+                _SIGNATURE = signature
+    return _CATALOG
 
 
 @app.on_event("startup")
 def load_catalog() -> None:
-    global _CATALOG, _BY_CODE
-    _CATALOG = build_catalog()
-    _BY_CODE = {p["code"]: p for p in _CATALOG}
+    current_catalog()
 
 
 def require_token(x_api_key: str = Header(default="")) -> None:
@@ -68,7 +82,7 @@ def list_products(
     category: str | None = None,
     active: bool | None = None,
 ) -> dict:
-    items = _CATALOG
+    items = current_catalog()
     if category:
         items = [p for p in items if p["category"].lower() == category.lower()]
     if active is not None:
@@ -85,6 +99,7 @@ def list_products(
 
 @app.get("/products/{code}", tags=["productos"], dependencies=[Depends(require_token)])
 def get_product(code: str) -> dict:
+    current_catalog()
     normalized = "".join(code.upper().split())
     product = _BY_CODE.get(normalized)
     if product is None:

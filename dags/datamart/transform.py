@@ -99,8 +99,13 @@ def to_utc(local_naive: pd.Series, source_timezone: str) -> pd.Series:
 
 
 def parse_local_dates(series: pd.Series, source_system: str) -> pd.Series:
-    """Parsea con el formato esperado de la fuente; lo que falle se reintenta de forma flexible."""
-    parsed = pd.to_datetime(series, format=DATE_FORMATS[source_system], errors="coerce")
+    """Parsea con los formatos conocidos de la fuente; lo que no calce se reintenta de forma flexible."""
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    for fmt in DATE_FORMATS[source_system]:
+        pending = parsed.isna() & series.notna()
+        if not pending.any():
+            break
+        parsed.loc[pending] = pd.to_datetime(series[pending], format=fmt, errors="coerce")
     pending = parsed.isna() & series.notna()
     if pending.any():
         parsed.loc[pending] = pd.to_datetime(series[pending], format="mixed", errors="coerce", dayfirst=False)

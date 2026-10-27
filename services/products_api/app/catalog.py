@@ -29,23 +29,29 @@ def _find_sources() -> list[Path]:
     return files or sorted(SEEDS_DIR.glob("*.csv"))
 
 
+def sources_signature() -> tuple:
+    """Huella de los archivos fuente: si cambia, el catalogo se vuelve a construir."""
+    return tuple((p.name, p.stat().st_size, int(p.stat().st_mtime)) for p in _find_sources())
+
+
 def _read(path: Path) -> pd.DataFrame:
+    # data.csv de Kaggle viene en ISO-8859-1: se prueba UTF-8 y, si falla al leer todo el archivo, Latin-1.
     for encoding in ("utf-8", "latin-1"):
         try:
             header = pd.read_csv(path, nrows=0, encoding=encoding)
-            break
+            normalized = {c: re.sub(r"[^a-z_]", "", c.strip().lower().replace(" ", "_")) for c in header.columns}
+            pick = {}
+            for internal, aliases in _ALIASES.items():
+                for original, norm in normalized.items():
+                    if norm in aliases:
+                        pick[internal] = original
+            if len(pick) < 3:
+                return pd.DataFrame(columns=list(_ALIASES))
+            frame = pd.read_csv(path, usecols=list(pick.values()), dtype=str, encoding=encoding)
+            return frame.rename(columns={v: k for k, v in pick.items()})
         except UnicodeDecodeError:
             continue
-    normalized = {c: re.sub(r"[^a-z_]", "", c.strip().lower().replace(" ", "_")) for c in header.columns}
-    pick = {}
-    for internal, aliases in _ALIASES.items():
-        for original, norm in normalized.items():
-            if norm in aliases:
-                pick[internal] = original
-    if len(pick) < 3:
-        return pd.DataFrame(columns=list(_ALIASES))
-    frame = pd.read_csv(path, usecols=list(pick.values()), dtype=str, encoding=encoding)
-    return frame.rename(columns={v: k for k, v in pick.items()})
+    return pd.DataFrame(columns=list(_ALIASES))
 
 
 def build_catalog() -> list[dict]:

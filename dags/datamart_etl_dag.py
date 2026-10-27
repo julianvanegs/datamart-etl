@@ -1,6 +1,6 @@
 """DAG diario del pipeline ETL de DataMart S.A.S.
 
-ensure -> extraer (3 fuentes en paralelo) -> transformar -> calidad ->
+validar -> extraer ventas (2 en paralelo) -> catalogo -> transformar -> calidad ->
 dimensiones -> [hechos | rechazos] -> agregado neto -> verificacion
 """
 from __future__ import annotations
@@ -87,7 +87,8 @@ with DAG(
         op_kwargs={"ds": "{{ ds }}"},
     )
 
-    validate_configuration >> [extract_sales_daily, extract_sales_history, extract_products_catalog]
-    [extract_sales_daily, extract_sales_history, extract_products_catalog] >> transform_and_unify
+    # El catalogo se consulta despues de extraer las ventas: asi la API ya ve los CSV (incluso si se acaban de descargar)
+    validate_configuration >> [extract_sales_daily, extract_sales_history]
+    [extract_sales_daily, extract_sales_history] >> extract_products_catalog >> transform_and_unify
     transform_and_unify >> run_quality_checks >> load_dimensions
     load_dimensions >> [load_facts, load_rejected_records] >> build_net_revenue >> verify_warehouse_load

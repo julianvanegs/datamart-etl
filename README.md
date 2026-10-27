@@ -14,27 +14,28 @@ Autor: **Julián Vanegas** · Prueba de desempeño, Ingeniería de Datos · Coho
 
 **Requisito único:** Docker Desktop (o Docker + Docker Compose) instalado y abierto. Se recomienda asignarle 4 GB de memoria si vas a usar los CSV completos de Kaggle.
 
-### 1. Clonar y configurar
+### 1. Clonar el repositorio
 ```bash
-git clone <URL-del-repositorio> datamart-etl
+git clone https://github.com/julianvanegs/datamart-etl.git
 cd datamart-etl
-cp .env.example .env        # en Windows (PowerShell): copy .env.example .env
 ```
-El archivo `.env` contiene usuarios y claves (ya vienen valores de ejemplo; cámbialos si quieres). No se sube a Git.
+(También sirve descargar el zip desde GitHub y descomprimirlo.)
 
 ### 2. (Opcional) Usar los datos reales de Kaggle
-Sin hacer nada, el pipeline corre con los **datos de prueba** de `seeds/` (≈1.700 filas con los mismos problemas de calidad). Para usar los datos reales, elige **una** opción:
+Sin hacer nada, el pipeline intenta **descargar los datasets reales solo** (con `kagglehub`; son públicos) y, si no hay internet o Kaggle no responde, usa los **datos de prueba** de `seeds/` (≈1.700 filas con los mismos problemas de calidad). Si prefieres ponerlos tú, cópialos en `data/raw/` con estos nombres:
 
-- **Manual:** descarga los CSV y cópialos en `data/raw/` con estos nombres:
-  - `data.csv` ← <https://www.kaggle.com/datasets/carrie1/ecommerce-data>
-  - `online_retail_II.csv` ← <https://www.kaggle.com/datasets/thedevastator/online-retail-transaction-data>
-- **Automática:** escribe tu `KAGGLE_USERNAME` y `KAGGLE_KEY` en `.env` y el pipeline los descarga solo.
+- `data.csv` ← <https://www.kaggle.com/datasets/carrie1/ecommerce-data>
+- `online_retail.csv` ← <https://www.kaggle.com/datasets/thedevastator/online-retail-transaction-data>
 
-### 3. Levantar todo con un comando
-```bash
-docker compose up --build
-```
-(también funciona `docker-compose up --build`). La primera vez tarda unos minutos mientras descarga las imágenes. Cuando termine de iniciar quedan corriendo, sin ningún paso manual:
+### 3. Levantar todo (elige la forma que te quede más fácil)
+
+| Sistema | Qué hacer |
+|---|---|
+| **Windows** | Doble clic en **`iniciar.bat`** |
+| **Mac / Linux** | `./iniciar.sh` (si no abre: `chmod +x iniciar.sh detener.sh` una vez) |
+| **Cualquiera, a mano** | `cp .env.example .env` (Windows: `copy .env.example .env`) y luego `docker compose up --build` |
+
+Los scripts verifican que Docker esté abierto, crean el archivo `.env` con valores por defecto si no existe (en Linux además lo ajustan a tu usuario) y levantan los servicios. La primera vez tarda unos minutos mientras descarga las imágenes; para apagar todo usa `detener.bat` / `./detener.sh`. Sin ningún otro paso manual quedan corriendo:
 
 | Servicio | Dónde |
 |---|---|
@@ -42,7 +43,9 @@ docker compose up --build
 | Repositorio analítico PostgreSQL | `localhost:5433` (base `datamart_dw`) |
 | API de productos + panel de indicadores | <http://localhost:8000> |
 
-El DAG `datamart_sales_etl` se activa solo y ejecuta la primera corrida automáticamente. Para repetirla: en la interfaz de Airflow pulsa ▶ (*Trigger DAG*).
+El DAG `datamart_sales_etl` se activa solo y ejecuta la primera corrida automáticamente (con los datos reales tarda ≈ 2 minutos). Para repetirla: en Airflow pulsa ▶ (*Trigger DAG*).
+
+**Único requisito:** Docker Desktop (o Docker + Docker Compose) instalado y abierto. Con los CSV completos conviene asignarle 4 GB de memoria.
 
 ### 4. Verificar que Connections y Variables quedaron configuradas
 **Con clics:** en Airflow, menú **Admin → Connections** (deben aparecer `datamart_dw` y `products_api`) y **Admin → Variables** (nueve variables `datamart_*`).
@@ -86,21 +89,27 @@ Cambia el nombre del archivo para cada pregunta:
 
 ---
 
-## Usarlo desde cualquier dispositivo
+## Adaptarlo a tu equipo
 
-El servicio `products-api` está pensado para integrarse fácilmente con celulares, tablets, otros computadores o herramientas BI:
+Todo lo que cambia de una persona a otra está en el archivo `.env` (no hay que tocar código):
 
-- **Panel web adaptable** (se ve bien en celular): `http://<IP-del-equipo>:8000/` — pega la clave de la API (`PRODUCTS_API_TOKEN` del `.env`) y verás ventas netas por mes, top de productos y países.
-- **API REST en JSON** con documentación interactiva en `http://<IP-del-equipo>:8000/docs`. Autenticación con la cabecera `X-API-Key`.
-  - `GET /products?page=1&page_size=100` · `GET /products/{codigo}` · `GET /analytics/monthly-net-sales` · `GET /analytics/top-products` · `GET /analytics/countries`
-- **Base de datos SQL** abierta en `DW_HOST_PORT` (por defecto 5433) para DBeaver, Power BI, Metabase, etc.
+| Quiero... | Cambio en `.env` |
+|---|---|
+| Que un puerto ocupado no moleste | `AIRFLOW_WEB_PORT`, `PRODUCTS_API_PORT`, `DW_HOST_PORT` |
+| Cambiar usuarios y claves | `AIRFLOW_ADMIN_*`, `AIRFLOW_DB_*`, `DW_DB_*`, `PRODUCTS_API_TOKEN` |
+| Usar otros archivos o datasets | `DATAMART_SALES_DAILY_FILE`, `DATAMART_SALES_HISTORY_FILE`, `KAGGLE_DATASET_*` |
+| Cambiar la zona horaria de origen de las fechas, el umbral de rechazo o apagar la API de productos | `DATAMART_SOURCE_TIMEZONE`, `DATAMART_MAX_REJECTION_RATIO`, `DATAMART_USE_PRODUCTS_API` |
 
-`<IP-del-equipo>` es la IP local del computador donde corre Docker (en el propio equipo basta `localhost`). El celular debe estar en la misma red Wi-Fi y el firewall debe permitir los puertos 8000 y 8080.
+Después de editar `.env`, vuelve a ejecutar `iniciar.bat` / `./iniciar.sh`. Las Variables también se pueden cambiar en vivo desde Airflow (**Admin → Variables**) sin reiniciar nada.
 
-Ejemplo:
-```bash
-curl -H "X-API-Key: <tu-clave>" "http://localhost:8000/products/85123A"
-```
+Funciona igual en Windows, Mac y Linux porque todo corre dentro de contenedores: no hay que instalar Python, Airflow ni PostgreSQL en tu computador.
+
+### Consultar los resultados desde otros equipos o el celular
+- **Panel web adaptable:** `http://<IP-del-equipo>:8000/` — pega la clave `PRODUCTS_API_TOKEN` del `.env` y verás ventas netas por mes, top de productos y países.
+- **API REST en JSON** con documentación interactiva en `/docs` (cabecera `X-API-Key`): `GET /products`, `GET /products/{codigo}`, `GET /analytics/monthly-net-sales`, `/analytics/top-products`, `/analytics/countries`.
+- **Base SQL** en el puerto `DW_HOST_PORT` para DBeaver, Power BI o Metabase.
+
+`<IP-del-equipo>` es la IP local del computador donde corre Docker (en ese mismo equipo basta `localhost`). El otro dispositivo debe estar en la misma red y el firewall debe permitir los puertos 8000 y 8080.
 
 ---
 
@@ -108,19 +117,21 @@ curl -H "X-API-Key: <tu-clave>" "http://localhost:8000/products/85123A"
 
 ```
 validate_configuration
-        ├─► extract_sales_daily ──────┐
-        ├─► extract_sales_history ────┼─► transform_and_unify ─► run_quality_checks ─► load_dimensions
-        └─► extract_products_catalog ─┘                                                      │
-                                                    ┌──────────────────────────────────────┤
-                                       load_sales_and_returns          load_rejected_records │
-                                                    └──────────────────┬───────────────────┘
-                                                      build_net_revenue_aggregate ─► verify_warehouse_load
+        ├─► extract_sales_daily ───┐
+        └─► extract_sales_history ─┴─► extract_products_catalog ─► transform_and_unify ─► run_quality_checks ─► load_dimensions
+                                                                                                                  │
+                                                              ┌───────────────────────────────────────────────────┤
+                                                 load_sales_and_returns                       load_rejected_records │
+                                                              └───────────────────────┬───────────────────────────┘
+                                                                      build_net_revenue_aggregate ─► verify_warehouse_load
 ```
 Reintenta 3 veces ante fallos, es idempotente (correrlo dos veces deja el mismo resultado) y no carga nada si falla algún chequeo de calidad. Detalle en [`docs/DECISIONES_TECNICAS.md`](docs/DECISIONES_TECNICAS.md).
 
 ## Estructura del repositorio
 
 ```
+├── iniciar.bat / iniciar.sh    Levantan todo con un clic (Windows / Mac-Linux)
+├── detener.bat / detener.sh    Apagan los servicios
 ├── docker-compose.yml          Todos los servicios
 ├── .env.example                Variables de entorno (copiar a .env)
 ├── dags/
@@ -147,9 +158,9 @@ python -m pytest tests -q
 
 | Síntoma | Solución |
 |---|---|
-| `variable is not set` al iniciar | Falta copiar `.env.example` a `.env` |
+| `variable is not set` al iniciar | Falta el archivo `.env`: usa `iniciar.bat` / `./iniciar.sh` o copia `.env.example` a `.env` |
 | Puerto 8080, 8000 o 5433 ocupado | Cambia `AIRFLOW_WEB_PORT`, `PRODUCTS_API_PORT` o `DW_HOST_PORT` en `.env` |
 | Quiero empezar desde cero | `docker compose down -v` (borra bases y vuelve a crear tablas al iniciar) |
 | El DAG usa datos de prueba y yo quería los reales | Revisa que los CSV estén en `data/raw/` con el nombre exacto, y vuelve a ejecutar el DAG |
-| En Linux: `Permission denied` en `data/staging` | `chmod -R a+rwX data` (Docker Desktop en Mac/Windows no lo necesita) |
+| En Linux: `Permission denied` en `data/` | Arranca con `./iniciar.sh` (ajusta el usuario); o `chmod -R a+rwX data` |
 | La API tarda en responder la primera vez | Construye el catálogo al arrancar; con los CSV completos toma ~1 minuto. El pipeline reintenta y, si no responde, usa la categorización de respaldo |

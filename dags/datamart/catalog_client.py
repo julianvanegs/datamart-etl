@@ -20,7 +20,7 @@ def fetch_catalog(base_url: str, token: str, page_size: int, attempts: int = 5, 
             page = 1
             while True:
                 response = requests.get(
-                    f"{base_url}/products", headers=headers, params={"page": page, "page_size": page_size}, timeout=30
+                    f"{base_url}/products", headers=headers, params={"page": page, "page_size": page_size}, timeout=180
                 )
                 response.raise_for_status()
                 body = response.json()

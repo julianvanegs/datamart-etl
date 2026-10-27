@@ -8,7 +8,7 @@ Este documento explica **qué decidí, por qué, y cómo se comprueba** en el c�
 
 ```
  data.csv (diario) ─┐
- online_retail_II.csv (histórico) ─┼─► Airflow (Docker) ─► Repositorio analítico (PostgreSQL, esquema dw)
+ online_retail.csv (histórico) ─┼─► Airflow (Docker) ─► Repositorio analítico (PostgreSQL, esquema dw)
  API de productos ─┘      │
                           └─ Metadatos de Airflow en OTRA base PostgreSQL (separada)
 ```
@@ -21,9 +21,9 @@ Este documento explica **qué decidí, por qué, y cómo se comprueba** en el c�
 | `airflow-webserver` / `airflow-scheduler` | Interfaz en `localhost:8080` y ejecución automática del DAG |
 | `products-api` | Catálogo de productos (sistema legado simulado) + indicadores para cualquier dispositivo |
 
-Los dos datasets de Kaggle pesan cientos de MB, por eso no se versionan. El pipeline busca cada archivo en este orden:
-1. `data/raw/` (los CSV reales que descargues),
-2. descarga automática desde Kaggle si defines `KAGGLE_USERNAME` y `KAGGLE_KEY` en `.env`,
+Los dos datasets de Kaggle pesan ≈ 50 MB cada uno, por eso no se versionan. El pipeline busca cada archivo en este orden:
+1. `data/raw/` (los CSV reales, si los pones tú),
+2. descarga automática con `kagglehub` (ambos datasets son públicos; las credenciales de Kaggle son opcionales),
 3. `seeds/` (datos de prueba incluidos, con los mismos problemas de calidad), para que el proyecto corra desde cero sin nada más.
 
 ## 2. Exploración de las fuentes
@@ -32,6 +32,7 @@ El pipeline **lee todo como texto** y solo convierte tipos dentro de la limpieza
 
 | Hallazgo | Fuente | Tratamiento |
 |---|---|---|
+| **El "historial extendido" es el mismo dataset que el diario**: `online_retail.csv` trae las mismas 541.909 filas (1-dic-2010 a 9-dic-2011) y solo agrega una columna `index`; los precios cambian de formato (`18` vs `18.0`) y nada más | ambas | Se lee igual (se ignora `index`) y el solapamiento se resuelve con la clave compuesta: el 100 % de las filas del histórico se descarta como duplicado (sección 4.3). Se verificó comparando las dos fuentes fila por fila |
 | Columnas con nombres distintos (`InvoiceNo`/`Invoice`, `UnitPrice`/`Price`, `CustomerID`/`Customer ID`) | ambas | Se unifican en `sources.py` (`COLUMN_ALIASES`) |
 | Fecha `12/1/2010 8:26` vs `2009-12-01 07:45:00`; hora local sin zona | ambas | Formato esperado por fuente + respaldo flexible; luego a UTC |
 | Archivo `data.csv` en ISO-8859-1 | diario | Lectura con UTF-8 y, si falla, Latin-1 |
@@ -84,6 +85,7 @@ Decisiones de diseño:
 - Una línea del histórico se considera duplicado real si coincide con una del diario en **(factura, producto, fecha-hora UTC, cantidad, precio)**. Se rechaza la del histórico con motivo `duplicate_across_sources_history_overlap`.
 - No uso solo el número de factura porque una factura tiene varias líneas; no incluyo cliente ni país porque son los campos que más cambian de formato entre datasets.
 - **Por qué prioridad al diario:** representa el sistema operacional vigente; el histórico es carga de respaldo.
+- **Resultado con los archivos reales:** 531.179 de las 531.179 líneas válidas del histórico coinciden con el diario y se rechazan por solapamiento, así que el historial no aporta fechas nuevas (el periodo cubierto es 1-dic-2010 a 9-dic-2011). Si el histórico fuera `online_retail_II.csv` (2009-2011), el mismo código conservaría solo las líneas que el diario no tiene.
 - Dentro de una misma fuente, las líneas **idénticas en todo** se tratan como un error de captura y se conserva la primera.
 
 ### 4.4 Otras reglas del negocio
@@ -117,19 +119,37 @@ Además: cada tarea de carga corre en **una transacción** (todo o nada), el DAG
 ## 6. Orquestación, reintentos y configuración
 
 - DAG `datamart_sales_etl`, `@daily`, `retries = 3` con espera exponencial.
-- Tareas: `validate_configuration` → (`extract_sales_daily`, `extract_sales_history`, `extract_products_catalog`) → `transform_and_unify` → `run_quality_checks` → `load_dimensions` → (`load_sales_and_returns`, `load_rejected_records`) → `build_net_revenue_aggregate` → `verify_warehouse_load`.
+- Tareas: `validate_configuration` → (`extract_sales_daily`, `extract_sales_history`) → `extract_products_catalog` → `transform_and_unify` → `run_quality_checks` → `load_dimensions` → (`load_sales_and_returns`, `load_rejected_records`) → `build_net_revenue_aggregate` → `verify_warehouse_load`.
 - **Connections:** `datamart_dw` (base destino) y `products_api`. **Variables:** 9 parámetros operativos (zona horaria, umbral de rechazo, uso de la API, tamaño de página, patrón de códigos, nombres de archivo y datasets de Kaggle). Todas se crean en `scripts/bootstrap_airflow.sh` a partir de `.env`; ningún usuario, clave ni cadena de conexión está en el código.
 - **Chequeos de calidad** (`quality.py`), si alguno falla no se carga nada: precios y cantidades válidos, fechas en UTC, códigos normalizados, `line_id` único, todo producto existe en la dimensión, categorías válidas, **cuadre** (filas leídas = ventas + devoluciones + rechazos) y tasa de rechazo bajo el umbral (`datamart_max_rejection_ratio`). La tasa cuenta solo problemas de calidad: el descarte por solapamiento entre fuentes es esperado y no se cuenta, porque el histórico repite cerca de la mitad del diario.
 
-## 7. Integración con cualquier dispositivo
+## 7. Facilidad para que otra persona lo ejecute en su computador
 
-Para que el repositorio sea fácil de consumir desde un celular, una tablet u otro computador, el servicio `products-api`:
-- expone **REST con JSON estándar** y documentación interactiva en `/docs`,
-- tiene **CORS habilitado** y escucha en `0.0.0.0`,
-- ofrece un **panel web adaptable (responsive)** en `/` con ventas netas por mes, top de productos y países,
-- se protege con la cabecera `X-API-Key`.
+El objetivo es que alguien que clone el repositorio lo corra en su propio equipo (Windows, Mac o Linux) sin instalar nada más que Docker:
+- **Todo en contenedores:** no hay que instalar Python, Airflow ni PostgreSQL; las versiones están fijadas.
+- **Un clic:** `iniciar.bat` (Windows) e `iniciar.sh` (Mac/Linux) comprueban que Docker esté abierto, crean el `.env` y levantan todo. En Linux ajustan el usuario del contenedor (`AIRFLOW_UID`) para que los archivos de `data/` no queden con permisos ajenos.
+- **Sin configuración manual dentro de Airflow:** usuario administrador, Connections y Variables se crean al iniciar.
+- **Todo lo propio de cada equipo está en `.env`:** puertos, claves, nombres de archivo, zona horaria, umbrales (README, sección "Adaptarlo a tu equipo"). Los saltos de línea de scripts y SQL se fijan con `.gitattributes` para que un clon en Windows no los rompa.
+- **Datos:** descarga automática con `kagglehub` si no hay CSV, y datos de prueba de respaldo; funciona incluso sin internet.
 
-Desde otro dispositivo de la misma red se usa la IP del equipo: `http://<IP-del-equipo>:8000`. Además, el repositorio analítico acepta conexiones SQL en el puerto configurado en `DW_HOST_PORT` (herramientas como DBeaver, Power BI o Metabase).
+Además, el servicio `products-api` permite consultar los resultados desde otros equipos o un celular: REST + JSON con documentación en `/docs`, CORS habilitado, escucha en `0.0.0.0`, panel web adaptable en `/` y clave por cabecera `X-API-Key`. El repositorio analítico acepta conexiones SQL en `DW_HOST_PORT` (DBeaver, Power BI, Metabase).
+
+## 7b. Resultados con los datos reales (Kaggle)
+
+Corrida completa del DAG con `data.csv` y `online_retail.csv` (≈ 2 minutos, 1.083.818 filas leídas):
+
+| Concepto | Valor |
+|---|---:|
+| Ventas cargadas (`fact_sales`) | 522.511 |
+| Devoluciones cargadas (`fact_returns`) | 8.668 |
+| Rechazos por calidad (por fuente) | 5.259 duplicados exactos · 2.974 códigos que no son producto · 1.161 ventas con precio ≤ 0 · 1.336 devoluciones/ajustes con precio ≤ 0 |
+| Tasa de rechazo por calidad | 1,98 % (el solapamiento entre fuentes no cuenta) |
+| Líneas sin customer ID (incluidas) | 131.363 ventas = **14,7 % del revenue bruto** (£1.509.697) en 1.371 facturas |
+| Códigos de producto en el repositorio | 3.810 (3.940 contando los que solo aparecen en filas rechazadas por precio) · 18 códigos no catálogo rechazados |
+| Productos con descripción inconsistente | 207 (textos realmente distintos, no solo mayúsculas) |
+| Revenue bruto / devoluciones / neto | £10.246.372 / £475.901 (4,6 %) / £9.770.471 |
+
+Hallazgo sobre las compras sin cliente: tienen un ticket promedio más del doble (£1.101 vs £475) con ≈ 96 líneas por factura contra 21, o sea que su comportamiento es distinto (facturas mucho más grandes y con menos unidades por línea); excluirlas habría ocultado casi el 15 % del ingreso.
 
 ## 8. Pendientes y mejoras (qué haría con más tiempo)
 
@@ -137,4 +157,5 @@ Desde otro dispositivo de la misma red se usa la IP del equipo: `http://<IP-del-
 - **Pruebas de DAG en CI** y más casos de prueba con los CSV reales.
 - **Tabla de tipo de cambio:** el enunciado menciona monedas distintas por país; los datasets están en una sola moneda (GBP), por lo que no se convirtió. Si hubiera monedas, se agregaría `dim_currency` y el revenue en una moneda común.
 - **Catálogo real:** reemplazar el catálogo simulado por el sistema legado y reemplazar la categoría por palabras clave por una tabla maestra.
-- **Recomendación a producto (pregunta 7):** el SQL que la respalda está en `sql/validation/07_recomendacion_para_producto.sql`. Las cifras y la conclusión deben redactarse con **los CSV reales** (ver `docs/RECOMENDACION_PRODUCTO.md`); con los datos de prueba no tendría validez.
+- **Recomendación a producto (pregunta 7):** redactada con las cifras reales en `docs/RECOMENDACION_PRODUCTO.md`; el SQL que la respalda está en `sql/validation/07_recomendacion_para_producto.sql`.
+- **Descarga automática con `kagglehub`:** implementada pero no probada con red real en el entorno de desarrollo (sin acceso a Kaggle); la ruta con los CSV en `data/raw/` sí se probó de extremo a extremo.
