@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataMart - Indicadores</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2430; --muted:#667085; --accent:#2f6fed; --line:#e4e7ec; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --card:#1b212a; --ink:#e8ecf2; --muted:#98a2b3; --accent:#6c9bff; --line:#2a323d; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  h1 { font-size:1.3rem; margin:8px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; overflow-x:auto; }
+  .card h2 { font-size:1rem; margin:0 0 10px; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td.n, th.n { text-align:right; }
+  form { display:flex; gap:8px; flex-wrap:wrap; }
+  input { flex:1 1 220px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); font-size:1rem; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:1rem; cursor:pointer; }
+  .msg { color:var(--muted); font-size:.9rem; }
+  .bar { height:8px; background:var(--accent); border-radius:4px; min-width:2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DataMart · Indicadores de ventas</h1>
+  <div class="card">
+    <form id="f"><input id="token" type="password" placeholder="Clave de la API (X-API-Key)" autocomplete="off">
+    <button>Ver datos</button></form>
+    <p class="msg" id="msg">Ingresa la clave para consultar el repositorio analítico. Documentación técnica en <a href="/docs">/docs</a>.</p>
+  </div>
+  <div class="card"><h2>Ventas netas por mes</h2><table id="monthly"></table></div>
+  <div class="card"><h2>Top 10 productos por revenue neto</h2><table id="top"></table></div>
+  <div class="card"><h2>Países: transacciones y ticket promedio</h2><table id="countries"></table></div>
+</main>
+<script>
+const fmt = v => typeof v === "number" ? v.toLocaleString("es-CO", {maximumFractionDigits: 2}) : v;
+function render(id, rows, cols) {
+  const t = document.getElementById(id);
+  if (!rows.length) { t.innerHTML = "<tr><td>Sin datos todavía</td></tr>"; return; }
+  t.innerHTML = "<tr>" + cols.map(c => `<th class="${typeof rows[0][c]==='number'?'n':''}">${c}</th>`).join("") + "</tr>" +
+    rows.map(r => "<tr>" + cols.map(c => `<td class="${typeof r[c]==='number'?'n':''}">${fmt(r[c])}</td>`).join("") + "</tr>").join("");
+}
+async function load(token) {
+  const get = p => fetch(p, {headers: {"X-API-Key": token}}).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  try {
+    render("monthly", await get("/analytics/monthly-net-sales"), ["month","gross_revenue","returns_amount","net_revenue"]);
+    render("top", await get("/analytics/top-products?limit=10"), ["stock_code","name","category","net_revenue"]);
+    render("countries", await get("/analytics/countries"), ["country","invoices","gross_revenue","avg_ticket"]);
+    document.getElementById("msg").textContent = "Datos actualizados.";
+  } catch (e) {
+    document.getElementById("msg").textContent = "No se pudo consultar (" + e.message + "). Revisa la clave o que el pipeline ya haya corrido.";
+  }
+}
+document.getElementById("f").addEventListener("submit", e => { e.preventDefault(); load(document.getElementById("token").value); });
+</script>
+</body>
+</html>

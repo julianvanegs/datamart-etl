@@ -1,0 +1,4 @@
+pandas==2.1.4
+pyarrow==14.0.2
+requests==2.32.3
+kaggle==1.6.17

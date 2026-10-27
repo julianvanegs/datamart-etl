@@ -1,0 +1,153 @@
+name: datamart-etl
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  image: datamart-airflow:2.9.3
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-postgres:5432/${AIRFLOW_DB_NAME}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: UTC
+    PYTHONPATH: /opt/airflow/dags:/opt/airflow/shared
+    DATAMART_DATA_DIR: /opt/airflow/data
+    DATAMART_SEEDS_DIR: /opt/airflow/seeds
+    KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+    KAGGLE_KEY: ${KAGGLE_KEY:-}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./shared:/opt/airflow/shared:ro
+    - ./seeds:/opt/airflow/seeds:ro
+    - ./scripts:/opt/airflow/scripts:ro
+    - ./sql:/opt/airflow/sql:ro
+    - ./data:/opt/airflow/data
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+    dw-postgres:
+      condition: service_healthy
+
+services:
+  # Base de datos 1: metadatos internos de Airflow
+  airflow-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_DB_USER} -d ${AIRFLOW_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Base de datos 2: repositorio analitico (destino del pipeline)
+  # Los scripts de sql/ddl se ejecutan automaticamente la primera vez que arranca.
+  dw-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${DW_DB_NAME}
+      POSTGRES_USER: ${DW_DB_USER}
+      POSTGRES_PASSWORD: ${DW_DB_PASSWORD}
+    ports:
+      - "${DW_HOST_PORT:-5433}:5432"
+    volumes:
+      - dw-db-data:/var/lib/postgresql/data
+      - ./sql/ddl:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DW_DB_USER} -d ${DW_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # API interna de productos (catalogo legado simulado)
+  products-api:
+    build:
+      context: ./services/products_api
+    environment:
+      PRODUCTS_API_TOKEN: ${PRODUCTS_API_TOKEN}
+      # Conexion de solo lectura al repositorio analitico (indicadores)
+      DW_DB_HOST: dw-postgres
+      DW_DB_NAME: ${DW_DB_NAME}
+      DW_DB_USER: ${DW_DB_USER}
+      DW_DB_PASSWORD: ${DW_DB_PASSWORD}
+      DATA_DIR: /data
+      SEEDS_DIR: /seeds
+      PYTHONPATH: /app:/shared
+    volumes:
+      - ./data:/data:ro
+      - ./seeds:/seeds:ro
+      - ./shared:/shared:ro
+    ports:
+      - "${PRODUCTS_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  # Paso unico de inicializacion: migra metadatos, crea admin, Connections y Variables
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: ["/bin/bash", "-c"]
+    # tr elimina saltos de linea CRLF por si el repo se clono en Windows
+    command: ["tr -d '\\r' < /opt/airflow/scripts/bootstrap_airflow.sh | bash"]
+    environment:
+      <<: *airflow-env
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL}
+      DW_DB_HOST: dw-postgres
+      DW_DB_NAME: ${DW_DB_NAME}
+      DW_DB_USER: ${DW_DB_USER}
+      DW_DB_PASSWORD: ${DW_DB_PASSWORD}
+      PRODUCTS_API_HOST: products-api
+      PRODUCTS_API_TOKEN: ${PRODUCTS_API_TOKEN}
+      DATAMART_SOURCE_TIMEZONE: ${DATAMART_SOURCE_TIMEZONE:-Europe/London}
+      DATAMART_MAX_REJECTION_RATIO: ${DATAMART_MAX_REJECTION_RATIO:-0.30}
+      DATAMART_USE_PRODUCTS_API: ${DATAMART_USE_PRODUCTS_API:-true}
+      DATAMART_API_PAGE_SIZE: ${DATAMART_API_PAGE_SIZE:-500}
+      DATAMART_SALES_DAILY_FILE: ${DATAMART_SALES_DAILY_FILE:-data.csv}
+      DATAMART_SALES_HISTORY_FILE: ${DATAMART_SALES_HISTORY_FILE:-online_retail_II.csv}
+      KAGGLE_DATASET_SALES_DAILY: ${KAGGLE_DATASET_SALES_DAILY:-carrie1/ecommerce-data}
+      KAGGLE_DATASET_SALES_HISTORY: ${KAGGLE_DATASET_SALES_HISTORY:-thedevastator/online-retail-transaction-data}
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  airflow-db-data:
+  dw-db-data:
+  airflow-logs:

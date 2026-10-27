@@ -1,0 +1,22 @@
+# Secretos y configuracion local
+.env
+
+# Datos pesados y archivos intermedios (se descargan o se generan)
+data/raw/*
+!data/raw/.gitkeep
+data/staging/*
+!data/staging/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Airflow / sistema
+logs/
+airflow.db
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

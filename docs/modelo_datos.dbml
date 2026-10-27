@@ -1,0 +1,89 @@
+// Pega este contenido en https://dbdiagram.io/d para ver el diagrama interactivo
+Project datamart_dw { database_type: 'PostgreSQL' }
+
+Table dim_date {
+  date_key int [pk, note: 'AAAAMMDD']
+  full_date date [unique]
+  year smallint
+  quarter smallint
+  month smallint
+  year_month char(7)
+  day_of_week smallint
+  is_weekend boolean
+}
+Table dim_country {
+  country_key int [pk]
+  country_name text [unique]
+}
+Table dim_customer {
+  customer_key int [pk, note: '0 = ANONYMOUS (sin customer ID)']
+  customer_id text [unique]
+  is_identified boolean
+}
+Table dim_product {
+  product_key int [pk]
+  stock_code text [unique, note: 'MAYUSCULAS, sin espacios']
+  canonical_description text
+  category text
+  category_source text [note: 'products_api | keyword_rules']
+  supplier_country text
+  is_active boolean
+  raw_variant_count int
+  normalized_variant_count int
+}
+Table product_description_variant {
+  product_key int [pk, ref: > dim_product.product_key]
+  raw_description text [pk]
+  occurrences int
+}
+Table fact_sales {
+  line_id uuid [pk]
+  invoice_no text
+  invoice_ts_utc timestamptz
+  date_key int [ref: > dim_date.date_key]
+  product_key int [ref: > dim_product.product_key]
+  customer_key int [ref: > dim_customer.customer_key]
+  country_key int [ref: > dim_country.country_key]
+  quantity int [note: '> 0']
+  unit_price numeric [note: '> 0']
+  gross_revenue numeric
+  source_system text
+}
+Table fact_returns {
+  line_id uuid [pk]
+  invoice_no text
+  invoice_ts_utc timestamptz
+  date_key int [ref: > dim_date.date_key]
+  product_key int [ref: > dim_product.product_key]
+  customer_key int [ref: > dim_customer.customer_key]
+  country_key int [ref: > dim_country.country_key]
+  quantity_returned int
+  unit_price numeric
+  return_amount numeric
+  is_cancellation_invoice boolean
+  source_system text
+}
+Table agg_daily_product_net {
+  date_key int [pk, ref: > dim_date.date_key]
+  product_key int [pk, ref: > dim_product.product_key]
+  units_sold bigint
+  units_returned bigint
+  gross_revenue numeric
+  returns_amount numeric
+  net_revenue numeric [note: 'bruto - devoluciones del mismo producto y dia']
+}
+Table rejected_records {
+  rejection_id bigint [pk]
+  run_date date
+  source_system text
+  source_row int
+  reject_reason text
+  invoice_no_raw text
+  stock_code_raw text
+  payload jsonb
+}
+Table etl_run_summary {
+  run_date date [pk]
+  metrics jsonb
+  finished_at timestamptz
+}

@@ -1,0 +1,2 @@
+# Los modulos de apoyo no son DAGs: evita que Airflow intente importarlos como tales
+datamart/
